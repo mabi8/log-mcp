@@ -1,5 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import { z } from 'zod';
 import { queryLogs, getServiceHealth, getKnownServices, type LogEntry, type ServiceHealth } from './journald.js';
@@ -286,7 +288,7 @@ function groupBy<T>(arr: T[], fn: (item: T) => string): Record<string, T[]> {
   return result;
 }
 
-// --- Express + SSE Transport ---
+// --- Express + Dual Transport (Streamable HTTP + SSE fallback) ---
 
 async function main() {
   const app = express();
@@ -312,28 +314,88 @@ async function main() {
     });
   }
 
-  // Track active transports for cleanup
-  const transports = new Map<string, SSEServerTransport>();
+  // --- Streamable HTTP transport (primary, what Claude.ai prefers) ---
+  const streamableTransports = new Map<string, StreamableHTTPServerTransport>();
 
-  // SSE endpoint - client connects here for the event stream
+  app.post('/mcp', express.json(), async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    if (sessionId && streamableTransports.has(sessionId)) {
+      const transport = streamableTransports.get(sessionId)!;
+      await transport.handleRequest(req, res);
+      return;
+    }
+
+    // New session — must be an initialize request
+    if (!isInitializeRequest(req.body)) {
+      res.status(400).json({ error: 'Bad request: expected initialize' });
+      return;
+    }
+
+    console.log(`[log-mcp] New Streamable HTTP session from ${req.ip}`);
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+      onsessioninitialized: (sid) => {
+        streamableTransports.set(sid, transport);
+        console.log(`[log-mcp] Streamable HTTP session initialized: ${sid}`);
+      },
+    });
+
+    transport.onclose = () => {
+      const sid = [...streamableTransports.entries()].find(([_, t]) => t === transport)?.[0];
+      if (sid) {
+        streamableTransports.delete(sid);
+        console.log(`[log-mcp] Streamable HTTP session closed: ${sid}`);
+      }
+    };
+
+    const mcpServer = createServer();
+    await mcpServer.connect(transport);
+    await transport.handleRequest(req, res);
+  });
+
+  // GET /mcp for SSE stream on Streamable HTTP sessions
+  app.get('/mcp', (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId || !streamableTransports.has(sessionId)) {
+      res.status(400).json({ error: 'Invalid or missing session ID' });
+      return;
+    }
+    const transport = streamableTransports.get(sessionId)!;
+    transport.handleRequest(req, res);
+  });
+
+  // DELETE /mcp to close sessions
+  app.delete('/mcp', (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId || !streamableTransports.has(sessionId)) {
+      res.status(400).json({ error: 'Invalid or missing session ID' });
+      return;
+    }
+    const transport = streamableTransports.get(sessionId)!;
+    transport.handleRequest(req, res);
+  });
+
+  // --- SSE transport (legacy fallback) ---
+  const sseTransports = new Map<string, SSEServerTransport>();
+
   app.get('/sse', async (req, res) => {
     console.log(`[log-mcp] New SSE connection from ${req.ip}`);
     const transport = new SSEServerTransport('/messages', res);
     const sessionId = transport.sessionId;
-    transports.set(sessionId, transport);
+    sseTransports.set(sessionId, transport);
 
     res.on('close', () => {
       console.log(`[log-mcp] SSE connection closed: ${sessionId}`);
-      transports.delete(sessionId);
+      sseTransports.delete(sessionId);
     });
 
     await server.connect(transport);
   });
 
-  // Message endpoint - client sends JSON-RPC messages here
   app.post('/messages', express.json(), async (req, res) => {
     const sessionId = req.query.sessionId as string;
-    const transport = transports.get(sessionId);
+    const transport = sseTransports.get(sessionId);
     if (!transport) {
       res.status(400).json({ error: 'Unknown session' });
       return;
@@ -343,13 +405,14 @@ async function main() {
 
   // Health check
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', version: '1.0.0', services: getKnownServices() });
+    res.json({ status: 'ok', version: '1.1.0', services: getKnownServices() });
   });
 
   app.listen(PORT, '127.0.0.1', () => {
     console.log(`[log-mcp] Server listening on 127.0.0.1:${PORT}`);
-    console.log(`[log-mcp] SSE endpoint: http://127.0.0.1:${PORT}/sse`);
-    console.log(`[log-mcp] Health check: http://127.0.0.1:${PORT}/health`);
+    console.log(`[log-mcp] Streamable HTTP: http://127.0.0.1:${PORT}/mcp`);
+    console.log(`[log-mcp] SSE (legacy):    http://127.0.0.1:${PORT}/sse`);
+    console.log(`[log-mcp] Health check:    http://127.0.0.1:${PORT}/health`);
   });
 }
 
