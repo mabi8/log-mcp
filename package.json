@@ -1,6 +1,7 @@
 {
   "name": "log-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "type": "module",
   "description": "MCP server exposing journald logs for AI-assisted debugging on box.makkib.com",
   "main": "dist/index.js",
   "scripts": {
