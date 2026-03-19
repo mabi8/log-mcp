@@ -1,7 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import { z } from 'zod';
 import { queryLogs, getServiceHealth, getKnownServices, type LogEntry, type ServiceHealth } from './journald.js';
@@ -288,11 +286,15 @@ function groupBy<T>(arr: T[], fn: (item: T) => string): Record<string, T[]> {
   return result;
 }
 
-// --- Express + Dual Transport (Streamable HTTP + SSE fallback) ---
+// --- Stateless Streamable HTTP Transport ---
+// Each request creates a fresh McpServer + transport. No session tracking.
+// This is the simplest pattern that works with Claude.ai.
 
 async function main() {
   const app = express();
-  const server = createServer();
+
+  // Parse JSON bodies for the /mcp endpoint
+  app.use(express.json());
 
   // --- Bearer token auth (optional) ---
   const AUTH_TOKEN = process.env.LOG_MCP_AUTH_TOKEN;
@@ -303,7 +305,6 @@ async function main() {
   if (AUTH_TOKEN) {
     app.use((req, res, next) => {
       if (req.path === '/health') return next();
-
       const authHeader = req.headers.authorization;
       if (!authHeader || authHeader !== `Bearer ${AUTH_TOKEN}`) {
         console.warn(`[log-mcp] Unauthorized request from ${req.ip} to ${req.path}`);
@@ -314,105 +315,50 @@ async function main() {
     });
   }
 
-  // --- Streamable HTTP transport (primary, what Claude.ai prefers) ---
-  const streamableTransports = new Map<string, StreamableHTTPServerTransport>();
-
-  app.post('/mcp', express.json(), async (req, res) => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-    if (sessionId && streamableTransports.has(sessionId)) {
-      const transport = streamableTransports.get(sessionId)!;
-      await transport.handleRequest(req, res);
+  // Streamable HTTP endpoint — handles POST, GET, DELETE on /mcp
+  app.all('/mcp', async (req, res) => {
+    // Only POST is supported in stateless mode
+    if (req.method === 'GET' || req.method === 'DELETE') {
+      res.status(405).set('Allow', 'POST').json({ error: 'Method not allowed in stateless mode' });
       return;
     }
 
-    // New session — must be an initialize request
-    if (!isInitializeRequest(req.body)) {
-      res.status(400).json({ error: 'Bad request: expected initialize' });
-      return;
-    }
+    console.log(`[log-mcp] ${req.method} /mcp from ${req.ip} — ${req.body?.method || 'unknown'}`);
 
-    console.log(`[log-mcp] New Streamable HTTP session from ${req.ip}`);
+    const server = createServer();
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => crypto.randomUUID(),
-      onsessioninitialized: (sid) => {
-        streamableTransports.set(sid, transport);
-        console.log(`[log-mcp] Streamable HTTP session initialized: ${sid}`);
-      },
+      sessionIdGenerator: undefined, // Stateless — no sessions
     });
-
-    transport.onclose = () => {
-      const sid = [...streamableTransports.entries()].find(([_, t]) => t === transport)?.[0];
-      if (sid) {
-        streamableTransports.delete(sid);
-        console.log(`[log-mcp] Streamable HTTP session closed: ${sid}`);
-      }
-    };
-
-    const mcpServer = createServer();
-    await mcpServer.connect(transport);
-    await transport.handleRequest(req, res);
-  });
-
-  // GET /mcp for SSE stream on Streamable HTTP sessions
-  app.get('/mcp', (req, res) => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    if (!sessionId || !streamableTransports.has(sessionId)) {
-      res.status(400).json({ error: 'Invalid or missing session ID' });
-      return;
-    }
-    const transport = streamableTransports.get(sessionId)!;
-    transport.handleRequest(req, res);
-  });
-
-  // DELETE /mcp to close sessions
-  app.delete('/mcp', (req, res) => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    if (!sessionId || !streamableTransports.has(sessionId)) {
-      res.status(400).json({ error: 'Invalid or missing session ID' });
-      return;
-    }
-    const transport = streamableTransports.get(sessionId)!;
-    transport.handleRequest(req, res);
-  });
-
-  // --- SSE transport (legacy fallback) ---
-  const sseTransports = new Map<string, SSEServerTransport>();
-
-  app.get('/sse', async (req, res) => {
-    console.log(`[log-mcp] New SSE connection from ${req.ip}`);
-    const transport = new SSEServerTransport('/messages', res);
-    const sessionId = transport.sessionId;
-    sseTransports.set(sessionId, transport);
 
     res.on('close', () => {
-      console.log(`[log-mcp] SSE connection closed: ${sessionId}`);
-      sseTransports.delete(sessionId);
+      transport.close().catch(() => {});
+      server.close().catch(() => {});
     });
 
-    await server.connect(transport);
-  });
-
-  app.post('/messages', express.json(), async (req, res) => {
-    const sessionId = req.query.sessionId as string;
-    const transport = sseTransports.get(sessionId);
-    if (!transport) {
-      res.status(400).json({ error: 'Unknown session' });
-      return;
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (err: any) {
+      console.error('[log-mcp] MCP error:', err.message);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+          id: null,
+        });
+      }
     }
-    await transport.handlePostMessage(req, res);
   });
 
-  // Health check
+  // Health check (unauthenticated)
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', version: '1.1.0', services: getKnownServices() });
+    res.json({ status: 'ok', version: '2.0.0', services: getKnownServices() });
   });
 
   app.listen(PORT, '127.0.0.1', () => {
     console.log(`[log-mcp] Server listening on 127.0.0.1:${PORT}`);
-    console.log(`[log-mcp] Streamable HTTP: http://127.0.0.1:${PORT}/mcp`);
-    console.log(`[log-mcp] SSE (legacy):    http://127.0.0.1:${PORT}/sse`);
-    console.log(`[log-mcp] Health check:    http://127.0.0.1:${PORT}/health`);
+    console.log(`[log-mcp] MCP endpoint: http://127.0.0.1:${PORT}/mcp`);
+    console.log(`[log-mcp] Health check: http://127.0.0.1:${PORT}/health`);
   });
 }
 
