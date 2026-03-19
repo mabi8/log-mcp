@@ -292,25 +292,25 @@ async function main() {
   const app = express();
   const server = createServer();
 
-  // --- Bearer token auth ---
+  // --- Bearer token auth (optional) ---
   const AUTH_TOKEN = process.env.LOG_MCP_AUTH_TOKEN;
   if (!AUTH_TOKEN) {
-    console.error('[log-mcp] FATAL: LOG_MCP_AUTH_TOKEN env var is required');
-    process.exit(1);
+    console.warn('[log-mcp] WARNING: No LOG_MCP_AUTH_TOKEN set — running without auth');
   }
 
-  app.use((req, res, next) => {
-    // Health check is unauthenticated (for uptime monitoring)
-    if (req.path === '/health') return next();
+  if (AUTH_TOKEN) {
+    app.use((req, res, next) => {
+      if (req.path === '/health') return next();
 
-    const authHeader = req.headers.authorization;
-    if (!authHeader || authHeader !== `Bearer ${AUTH_TOKEN}`) {
-      console.warn(`[log-mcp] Unauthorized request from ${req.ip} to ${req.path}`);
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-    next();
-  });
+      const authHeader = req.headers.authorization;
+      if (!authHeader || authHeader !== `Bearer ${AUTH_TOKEN}`) {
+        console.warn(`[log-mcp] Unauthorized request from ${req.ip} to ${req.path}`);
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      next();
+    });
+  }
 
   // Track active transports for cleanup
   const transports = new Map<string, SSEServerTransport>();
