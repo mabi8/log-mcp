@@ -3,42 +3,48 @@
 # Run this ON box.makkib.com as root (or with sudo)
 set -euo pipefail
 
-REPO_DIR="/opt/log-mcp"
-SERVICE_USER="bclai"
+SERVICE_USER="logmcp"
+REPO_DIR="/home/${SERVICE_USER}/log-mcp"
 SERVICE_NAME="log-mcp"
 
 echo "=== Deploying Log MCP Server ==="
 
-# 1. Clone/update repo
+# 1. Create dedicated user if not exists
+if ! id "$SERVICE_USER" &>/dev/null; then
+  echo "Creating user $SERVICE_USER..."
+  useradd -r -m -s /bin/bash "$SERVICE_USER"
+fi
+
+# 2. Clone/update repo
 if [ -d "$REPO_DIR" ]; then
   echo "Updating existing installation..."
   cd "$REPO_DIR"
-  git pull
+  sudo -u "$SERVICE_USER" git pull
 else
   echo "Cloning repository..."
-  git clone https://github.com/mabi8/log-mcp.git "$REPO_DIR"
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
+  sudo -u "$SERVICE_USER" git clone https://github.com/mabi8/log-mcp.git "$REPO_DIR"
   cd "$REPO_DIR"
 fi
 
-# 2. Install dependencies and build
+# 3. Install dependencies and build
 echo "Installing dependencies..."
+cd "$REPO_DIR"
 sudo -u "$SERVICE_USER" npm ci --production=false
 echo "Building TypeScript..."
 sudo -u "$SERVICE_USER" npm run build
 
-# 3. Ensure bclai user is in systemd-journal group (for journalctl access)
+# 4. Ensure logmcp user is in systemd-journal group (for journalctl access)
 echo "Ensuring journal access..."
 usermod -aG systemd-journal "$SERVICE_USER" 2>/dev/null || true
 
-# 4. Install systemd service
+# 5. Install systemd service
 echo "Installing systemd service..."
 cp deploy/log-mcp.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
-# 5. Check status
+# 6. Check status
 sleep 2
 if systemctl is-active --quiet "$SERVICE_NAME"; then
   echo "✅ $SERVICE_NAME is running"

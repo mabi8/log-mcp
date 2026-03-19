@@ -34,8 +34,11 @@ Lets Claude (or any MCP client) query system logs directly from a chat conversat
 
 ```bash
 # On box.makkib.com as root:
-git clone https://github.com/mabi8/log-mcp.git /opt/log-mcp
-cd /opt/log-mcp
+# Creates user 'logmcp', clones to /home/logmcp/log-mcp, builds, installs service
+curl -s https://raw.githubusercontent.com/mabi8/log-mcp/main/deploy/deploy.sh | bash
+# Or manually:
+git clone https://github.com/mabi8/log-mcp.git /tmp/log-mcp-install
+cd /tmp/log-mcp-install
 bash deploy/deploy.sh
 ```
 
@@ -47,7 +50,7 @@ Then add nginx config from `deploy/nginx-log-mcp.conf` to your server block.
 journald ← bclai, cdmcp, bidrento-mcp (structured JSON logs)
     │
     ▼
-log-mcp (port 3850, SSE)
+log-mcp (port 3850, SSE) — runs as user 'logmcp' under /home/logmcp/
     │
     ▼
 nginx (box.makkib.com/logs/mcp)
@@ -66,7 +69,7 @@ Claude.ai (MCP connector)
 
 1. Ensure the service writes to journald with a unique `SyslogIdentifier`
 2. Add the identifier to `KNOWN_SERVICES` in `src/journald.ts`
-3. Rebuild and restart: `npm run build && sudo systemctl restart log-mcp`
+3. Rebuild and restart: `cd /home/logmcp/log-mcp && sudo -u logmcp npm run build && sudo systemctl restart log-mcp`
 
 ## Development
 

@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=bclai
-Group=bclai
-WorkingDirectory=/opt/log-mcp
-ExecStart=/usr/bin/node /opt/log-mcp/dist/index.js
+User=logmcp
+Group=logmcp
+WorkingDirectory=/home/logmcp/log-mcp
+ExecStart=/usr/bin/node /home/logmcp/log-mcp/dist/index.js
 Restart=always
 RestartSec=5
 SyslogIdentifier=log-mcp
@@ -18,7 +18,6 @@ Environment=PORT=3850
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
 # Need read access to journal
 SupplementaryGroups=systemd-journal
 
