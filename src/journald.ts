@@ -19,7 +19,7 @@ export interface QueryOptions {
   reverse?: boolean;    // newest first (default true)
 }
 
-const KNOWN_SERVICES = ['bclai', 'cdmcp', 'bidrento-mcp', 'bcl-wa-bot', 'log-mcp'];
+const KNOWN_SERVICES = ['bcl-telegram', 'mcp-centerdevice', 'mcp-bidrento', 'bcl-wa-bot', 'log-mcp'];
 
 const PRIORITY_MAP: Record<string, number> = {
   emerg: 0, alert: 1, crit: 2, err: 3,
@@ -38,7 +38,7 @@ export function queryLogs(opts: QueryOptions): LogEntry[] {
     // Support comma-separated services
     const services = opts.service.split(',').map(s => s.trim());
     for (const svc of services) {
-      args.push(`-t`, svc);
+      args.push(`-u`, `${svc}.service`);
     }
   }
 
