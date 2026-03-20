@@ -20,7 +20,7 @@ function createServer(): McpServer {
     'Query journald logs by service, time range, severity level, and keyword. Returns structured log entries.',
     {
       service: z.string().optional().describe(
-        'Service name (e.g. "bclai", "cdmcp", "bidrento-mcp", "bcl-wa-bot"). Comma-separated for multiple. Omit for all services.'
+        'Service name (e.g. "bcl-telegram", "mcp-centerdevice", "mcp-bidrento"). Comma-separated for multiple. Omit for all services.'
       ),
       since: z.string().optional().describe(
         'Start time. Accepts: "1 hour ago", "30 minutes ago", "today", "yesterday", "2025-03-20 10:00:00". Default: 1 hour ago.'
@@ -160,7 +160,7 @@ function createServer(): McpServer {
     'tail_logs',
     'Get the last N log lines from a specific service. Like "tail -f" but for AI consumption.',
     {
-      service: z.string().describe('Service name (e.g. "bclai", "cdmcp").'),
+      service: z.string().describe('Service name (e.g. "bcl-telegram", "mcp-centerdevice").'),
       lines: z.number().optional().describe('Number of lines. Default: 30.'),
       level: z.enum(['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug']).optional(),
     },
