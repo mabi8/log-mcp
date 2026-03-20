@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 
 export interface LogEntry {
   timestamp: string;
@@ -42,8 +42,8 @@ export function queryLogs(opts: QueryOptions): LogEntry[] {
     }
   }
 
-  if (opts.since) args.push(`--since=${opts.since}`);
-  if (opts.until) args.push(`--until=${opts.until}`);
+  if (opts.since) args.push(`--since`, opts.since);
+  if (opts.until) args.push(`--until`, opts.until);
 
   if (opts.level) {
     const prio = PRIORITY_MAP[opts.level.toLowerCase()];
@@ -53,7 +53,7 @@ export function queryLogs(opts: QueryOptions): LogEntry[] {
   }
 
   if (opts.grep) {
-    args.push(`--grep=${opts.grep}`);
+    args.push(`--grep`, opts.grep);
   }
 
   const lines = opts.lines || 50;
@@ -64,9 +64,9 @@ export function queryLogs(opts: QueryOptions): LogEntry[] {
   }
 
   try {
-    const cmd = args.join(' ');
-    console.log(`[log-mcp] exec: ${cmd}`);
-    const output = execSync(cmd, {
+    const [cmd, ...cmdArgs] = args;
+    console.log(`[log-mcp] exec: ${cmd} ${cmdArgs.join(' ')}`);
+    const output = execFileSync(cmd, cmdArgs, {
       encoding: 'utf-8',
       timeout: 15000,
       maxBuffer: 5 * 1024 * 1024, // 5MB
