@@ -64,7 +64,9 @@ export function queryLogs(opts: QueryOptions): LogEntry[] {
   }
 
   try {
-    const output = execSync(args.join(' '), {
+    const cmd = args.join(' ');
+    console.log(`[log-mcp] exec: ${cmd}`);
+    const output = execSync(cmd, {
       encoding: 'utf-8',
       timeout: 15000,
       maxBuffer: 5 * 1024 * 1024, // 5MB
@@ -77,11 +79,13 @@ export function queryLogs(opts: QueryOptions): LogEntry[] {
       .map(line => parseJournaldJson(line))
       .filter((entry): entry is LogEntry => entry !== null);
   } catch (err: any) {
-    // journalctl returns exit code 1 when no matches found
+    // journalctl returns exit code 1 when no matches found with --grep
     if (err.status === 1 && (!err.stdout || err.stdout.trim() === '')) {
       return [];
     }
-    throw new Error(`journalctl failed: ${err.message}`);
+    // Log the full error for debugging
+    console.error(`[log-mcp] journalctl failed: status=${err.status}, stderr=${err.stderr?.substring(0, 200)}, stdout=${err.stdout?.substring(0, 200)}`);
+    throw new Error(`journalctl failed (exit ${err.status}): ${err.stderr || err.message}`);
   }
 }
 
